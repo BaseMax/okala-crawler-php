@@ -54,11 +54,11 @@ CATEGORIES = [
 
 ## Get Products in a spefic category by any stores nearby me (Tehran)
 
-slug (category): beverages
+For example one slug (category): beverages
 
-lat: 35.805851
+Tehran lat: 35.805851
 
-lon: 51.431311
+Tehran lon: 51.431311
 
 ```
 curl 'https://apigateway.okala.com/api/unicorn/v2/products/nearby?slug=beverages&lat=35.805851&lon=51.431311' \
