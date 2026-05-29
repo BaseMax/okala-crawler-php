@@ -1,0 +1,7 @@
+cache
+output
+
+*.logs
+*.json
+*.rar
+*.zip
