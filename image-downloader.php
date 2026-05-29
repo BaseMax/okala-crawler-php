@@ -1,206 +1,342 @@
 <?php
-$filename = "products.json";
-$image_dir = __DIR__ . "/images";
+const CONFIG_FILE = "products.json";
+const IMAGE_DIR = __DIR__ . "/images";
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MIN_IMAGE_SIZE = 1024;
+const CURL_TIMEOUT = 20;
+const CURL_CONNECT_TIMEOUT = 10;
+const MAX_MEMORY_USAGE = 50 * 1024 * 1024;
 
-define("MAX_IMAGE_SIZE", 5 * 1024 * 1024); // 5MB
-define("MIN_IMAGE_SIZE", 1024); // 1KB
-
-/* ======================================================
- * INIT
- * ====================================================== */
-if (!file_exists($filename)) {
-    die("products.json not found\n");
-}
-
-$data = json_decode(file_get_contents($filename), true);
-
-if (!$data) {
-    die("Invalid JSON\n");
-}
-
-@mkdir($image_dir . "/brand", 0777, true);
-@mkdir($image_dir . "/product", 0777, true);
-
-/* ======================================================
- * HTTP DOWNLOAD
- * ====================================================== */
-function isValidWebp($file)
+class Logger
 {
-    if (!file_exists($file)) return false;
+    private $stats = [
+        'downloaded' => 0,
+        'cached' => 0,
+        'failed' => 0,
+        'invalid_size' => 0,
+        'skipped' => 0,
+    ];
 
-    if (filesize($file) < 100) return false; // too small = broken
+    public function logDownload(string $message): void
+    {
+        echo "[DOWNLOAD] ⬇️  $message\n";
+    }
 
-    $info = @getimagesize($file);
+    public function logCache(string $message): void
+    {
+        echo "[CACHE] ⏭️  $message\n";
+        $this->stats['cached']++;
+    }
 
-    if (!$info) return false;
+    public function logSuccess(string $message): void
+    {
+        echo "[SUCCESS] ✅ $message\n";
+        $this->stats['downloaded']++;
+    }
 
-    return $info['mime'] === 'image/webp';
+    public function logError(string $message, ?string $reason = null): void
+    {
+        $msg = "[ERROR] ❌ $message";
+        if ($reason) {
+            $msg .= " ($reason)";
+        }
+        echo "$msg\n";
+        $this->stats['failed']++;
+    }
+
+    public function logWarning(string $message): void
+    {
+        echo "[WARNING] ⚠️  $message\n";
+    }
+
+    public function logInfo(string $message): void
+    {
+        echo "[INFO] ℹ️  $message\n";
+    }
+
+    public function incrementSkipped(): void
+    {
+        $this->stats['skipped']++;
+    }
+
+    public function incrementInvalidSize(): void
+    {
+        $this->stats['invalid_size']++;
+    }
+
+    public function printStats(): void
+    {
+        echo "\n" . str_repeat("=", 60) . "\n";
+        echo "📊 Download Statistics\n";
+        echo str_repeat("=", 60) . "\n";
+        echo "✅ Downloaded: " . $this->stats['downloaded'] . "\n";
+        echo "⏭️  Cached:     " . $this->stats['cached'] . "\n";
+        echo "❌ Failed:     " . $this->stats['failed'] . "\n";
+        echo "⚠️  Invalid Size: " . $this->stats['invalid_size'] . "\n";
+        echo "⊘  Skipped:    " . $this->stats['skipped'] . "\n";
+        echo str_repeat("=", 60) . "\n";
+    }
 }
 
-function saveImage($dir, $url)
+class ProgressBar
 {
-    static $seen = [];
+    private $total;
+    private $current = 0;
+    private $startTime;
 
-    if (!$url) return;
-
-    $hash = md5($url);
-    $file = "{$dir}/{$hash}.webp";
-
-    if (isset($seen[$hash])) return;
-    $seen[$hash] = true;
-
-    if (isValidWebp($file)) {
-        echo "⏭️ skip (cached): $file\n";
-        return;
+    public function __construct(int $total)
+    {
+        $this->total = $total;
+        $this->startTime = time();
     }
 
-    if (file_exists($file)) {
-        unlink($file);
+    public function advance(): void
+    {
+        $this->current++;
+        $this->render();
     }
 
-    $tmp = sys_get_temp_dir() . "/img_" . $hash;
+    private function render(): void
+    {
+        $percentage = ($this->current / $this->total) * 100;
+        $barLength = 30;
+        $filledLength = (int)(($this->current / $this->total) * $barLength);
 
-    echo "⬇️ downloading: $url\n";
+        $bar = str_repeat("█", $filledLength) . str_repeat("░", $barLength - $filledLength);
+        $elapsed = time() - $this->startTime;
+        $remaining = $this->current > 0 ? (int)(($elapsed / $this->current) * ($this->total - $this->current)) : 0;
 
-    if (!downloadImageToFile($url, $tmp)) {
-        echo "❌ download failed\n";
-        return;
+        echo "\r";
+        echo sprintf("[%s] %d/%d (%.1f%%) | %ds elapsed, %ds remaining",
+            $bar, $this->current, $this->total, $percentage, $elapsed, $remaining);
+
+        if ($this->current === $this->total) {
+            echo "\n";
+        }
     }
-
-    $size = filesize($tmp);
-    if ($size < MIN_IMAGE_SIZE || $size > MAX_IMAGE_SIZE) {
-        echo "❌ invalid size\n";
-        unlink($tmp);
-        return;
-    }
-
-    if (!convertFileToWebp($tmp, $file)) {
-        echo "❌ convert failed\n";
-        unlink($tmp);
-        return;
-    }
-
-    unlink($tmp);
-
-    echo "✅ saved: $file\n";
 }
 
-function downloadImageToFile($url, $tmpFile)
+class ImageDownloader
 {
-    $fp = fopen($tmpFile, 'w+');
+    private $logger;
+    private $seenUrls = [];
 
-    $ch = curl_init($url);
-
-    curl_setopt_array($ch, [
-        CURLOPT_FILE => $fp,
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_TIMEOUT => 20,
-        CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_SSL_VERIFYPEER => false,
-        CURLOPT_USERAGENT => "Mozilla/5.0",
-    ]);
-
-    curl_exec($ch);
-
-    $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-
-    curl_close($ch);
-    fclose($fp);
-
-    if (!$contentType || strpos($contentType, "image/") !== 0) {
-        unlink($tmpFile);
-        return false;
+    public function __construct(Logger $logger)
+    {
+        $this->logger = $logger;
     }
 
-    return true;
-}
+    public function download(string $url, string $dir): bool
+    {
+        if (!$url) {
+            $this->logger->incrementSkipped();
+            return false;
+        }
 
-/* ======================================================
- * CONVERT TO WEBP
- * ====================================================== */
-function convertToWebp($imageData)
-{
-    $info = @getimagesizefromstring($imageData);
+        $hash = md5($url);
 
-    if (!$info) return null;
+        if (isset($this->seenUrls[$hash])) {
+            $this->logger->logInfo("URL already processed: " . substr($url, 0, 50) . "...");
+            $this->logger->incrementSkipped();
+            return false;
+        }
 
-    $width  = $info[0];
-    $height = $info[1];
+        $this->seenUrls[$hash] = true;
+        $filePath = "{$dir}/{$hash}.webp";
 
-    $estimatedMemory = $width * $height * 4;
-    if ($estimatedMemory > 100 * 1024 * 1024) {
-        echo "❌ too large (dimensions)\n";
-        return null;
+        if ($this->isValidWebp($filePath)) {
+            $this->logger->logCache("Cached: {$filePath}");
+            return true;
+        }
+
+        if (file_exists($filePath)) {
+            @unlink($filePath);
+        }
+
+        $tempFile = sys_get_temp_dir() . "/img_" . $hash;
+
+        $this->logger->logDownload("Downloading: " . substr($url, 0, 60) . "...");
+
+        if (!$this->downloadToFile($url, $tempFile)) {
+            $this->logger->logError("Download failed", "Invalid content type or network error");
+            @unlink($tempFile);
+            return false;
+        }
+
+        $size = @filesize($tempFile);
+        if ($size === false || $size < MIN_IMAGE_SIZE || $size > MAX_IMAGE_SIZE) {
+            $this->logger->logWarning("Invalid file size: {$size} bytes");
+            $this->logger->incrementInvalidSize();
+            @unlink($tempFile);
+            return false;
+        }
+
+        if (!$this->convertToWebp($tempFile, $filePath)) {
+            $this->logger->logError("WebP conversion failed");
+            @unlink($tempFile);
+            return false;
+        }
+
+        @unlink($tempFile);
+        $this->logger->logSuccess("Saved: {$filePath}");
+        return true;
     }
 
-    $img = @imagecreatefromstring($imageData);
-    if (!$img) return null;
+    private function isValidWebp(string $filePath): bool
+    {
+        if (!file_exists($filePath)) {
+            return false;
+        }
 
-    ob_start();
-    imagewebp($img, null, 80);
-    $webpData = ob_get_clean();
+        $fileSize = @filesize($filePath);
+        if ($fileSize === false || $fileSize < 100) {
+            return false;
+        }
 
-    imagedestroy($img);
-
-    return $webpData ?: null;
-}
-
-function convertFileToWebp($input, $output)
-{
-    $info = @getimagesize($input);
-    if (!$info) return false;
-
-    $width  = $info[0];
-    $height = $info[1];
-
-    $estimatedMemory = $width * $height * 4;
-
-    if ($estimatedMemory > 50 * 1024 * 1024) {
-        echo "❌ too large (dimensions)\n";
-        return false;
+        $info = @getimagesize($filePath);
+        return $info && ($info['mime'] === 'image/webp');
     }
 
-    $data = file_get_contents($input);
-    if (!$data) return false;
+    private function downloadToFile(string $url, string $targetFile): bool
+    {
+        $fp = @fopen($targetFile, 'w+');
+        if (!$fp) {
+            $this->logger->logError("Cannot open temp file for writing", $targetFile);
+            return false;
+        }
 
-    $img = @imagecreatefromstring($data);
-    if (!$img) return false;
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_FILE => $fp,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => CURL_TIMEOUT,
+            CURLOPT_CONNECTTIMEOUT => CURL_CONNECT_TIMEOUT,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_USERAGENT => "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        ]);
 
-    if (!imageistruecolor($img)) {
-        $truecolor = imagecreatetruecolor(imagesx($img), imagesy($img));
+        curl_exec($ch);
+        $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
-        imagealphablending($truecolor, false);
-        imagesavealpha($truecolor, true);
+        curl_close($ch);
+        fclose($fp);
 
-        imagecopy($truecolor, $img, 0, 0, 0, 0, imagesx($img), imagesy($img));
+        if ($httpCode !== 200) {
+            $this->logger->logWarning("HTTP {$httpCode} response code");
+            return false;
+        }
 
+        if (!$contentType || strpos($contentType, "image/") !== 0) {
+            $this->logger->logWarning("Invalid content type: {$contentType}");
+            return false;
+        }
+
+        return true;
+    }
+
+    private function convertToWebp(string $input, string $output): bool
+    {
+        $info = @getimagesize($input);
+        if (!$info) {
+            $this->logger->logWarning("Cannot read image dimensions");
+            return false;
+        }
+
+        $width = $info[0];
+        $height = $info[1];
+        $estimatedMemory = $width * $height * 4;
+
+        if ($estimatedMemory > MAX_MEMORY_USAGE) {
+            $this->logger->logWarning("Image too large for memory: {$width}x{$height}");
+            return false;
+        }
+
+        $data = @file_get_contents($input);
+        if (!$data) {
+            $this->logger->logWarning("Cannot read image data");
+            return false;
+        }
+
+        $img = @imagecreatefromstring($data);
+        if (!$img) {
+            $this->logger->logWarning("Cannot load image resource");
+            return false;
+        }
+
+        if (!imageistruecolor($img)) {
+            $truecolor = imagecreatetruecolor(imagesx($img), imagesy($img));
+            imagealphablending($truecolor, false);
+            imagesavealpha($truecolor, true);
+            imagecopy($truecolor, $img, 0, 0, 0, 0, imagesx($img), imagesy($img));
+            imagedestroy($img);
+            $img = $truecolor;
+        }
+
+        imagealphablending($img, true);
+        imagesavealpha($img, true);
+
+        $result = @imagewebp($img, $output, 80);
         imagedestroy($img);
-        $img = $truecolor;
-    }
 
-    imagealphablending($img, true);
-    imagesavealpha($img, true);
-
-    $result = imagewebp($img, $output, 80);
-
-    imagedestroy($img);
-
-    return $result;
-}
-
-/* ======================================================
- * MAIN LOOP
- * ====================================================== */
-foreach ($data as $product_item) {
-    /* -------- BRAND IMAGE -------- */
-    if (!empty($product_item["brandImage"])) {
-        saveImage($image_dir . "/brand", $product_item["brandImage"]);
-    }
-
-    /* -------- PRODUCT IMAGES -------- */
-    $images = $product_item["images"] ?? [];
-
-    foreach ($images as $img) {
-        saveImage($image_dir . "/product", $img);
+        return $result !== false;
     }
 }
+
+$logger = new Logger();
+
+if (!file_exists(CONFIG_FILE)) {
+    $logger->logError("Configuration file not found", CONFIG_FILE);
+    die(1);
+}
+
+$logger->logInfo("Loading configuration from: " . CONFIG_FILE);
+$json = file_get_contents(CONFIG_FILE);
+$data = json_decode($json, true);
+
+if (!$data || !is_array($data)) {
+    $logger->logError("Invalid or empty JSON", json_last_error_msg());
+    die(1);
+}
+
+$logger->logInfo("Loaded " . count($data) . " products");
+
+if (!@mkdir(IMAGE_DIR . "/brand", 0777, true)) {
+    $logger->logWarning("Could not create brand directory");
+}
+if (!@mkdir(IMAGE_DIR . "/product", 0777, true)) {
+    $logger->logWarning("Could not create product directory");
+}
+
+$logger->logInfo("Image output directory: " . IMAGE_DIR);
+echo "\n";
+
+$totalImages = 0;
+foreach ($data as $item) {
+    if (!empty($item["brandImage"])) {
+        $totalImages++;
+    }
+    $images = $item["images"] ?? [];
+    $totalImages += count($images);
+}
+
+$progressBar = new ProgressBar($totalImages);
+$downloader = new ImageDownloader($logger);
+
+foreach ($data as $index => $product) {
+    $productName = $product["name"] ?? "Unknown";
+    $logger->logInfo("Processing product: {$productName}");
+
+    if (!empty($product["brandImage"])) {
+        $downloader->download($product["brandImage"], IMAGE_DIR . "/brand");
+        $progressBar->advance();
+    }
+
+    $images = $product["images"] ?? [];
+    foreach ($images as $imageUrl) {
+        $downloader->download($imageUrl, IMAGE_DIR . "/product");
+        $progressBar->advance();
+    }
+}
+
+$logger->printStats();
