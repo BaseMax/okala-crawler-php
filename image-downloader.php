@@ -24,44 +24,95 @@ if (!$data) {
 /* ======================================================
  * HTTP DOWNLOAD
  * ====================================================== */
-function downloadImage($url)
+function isValidWebp($file)
 {
+    if (!file_exists($file)) return false;
+
+    if (filesize($file) < 100) return false; // too small = broken
+
+    $info = @getimagesize($file);
+
+    if (!$info) return false;
+
+    return $info['mime'] === 'image/webp';
+}
+
+function saveImage($dir, $url)
+{
+    static $seen = [];
+
+    if (!$url) return;
+
+    $hash = md5($url);
+    $file = "{$dir}/{$hash}.webp";
+
+    if (isset($seen[$hash])) return;
+    $seen[$hash] = true;
+
+    if (isValidWebp($file)) {
+        echo "⏭️ skip (cached): $file\n";
+        return;
+    }
+
+    if (file_exists($file)) {
+        unlink($file);
+    }
+
+    $tmp = sys_get_temp_dir() . "/img_" . $hash;
+
+    echo "⬇️ downloading: $url\n";
+
+    if (!downloadImageToFile($url, $tmp)) {
+        echo "❌ download failed\n";
+        return;
+    }
+
+    $size = filesize($tmp);
+    if ($size < MIN_IMAGE_SIZE || $size > MAX_IMAGE_SIZE) {
+        echo "❌ invalid size\n";
+        unlink($tmp);
+        return;
+    }
+
+    if (!convertFileToWebp($tmp, $file)) {
+        echo "❌ convert failed\n";
+        unlink($tmp);
+        return;
+    }
+
+    unlink($tmp);
+
+    echo "✅ saved: $file\n";
+}
+
+function downloadImageToFile($url, $tmpFile)
+{
+    $fp = fopen($tmpFile, 'w+');
+
     $ch = curl_init($url);
 
     curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FILE => $fp,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_TIMEOUT => 20,
         CURLOPT_CONNECTTIMEOUT => 10,
         CURLOPT_SSL_VERIFYPEER => false,
         CURLOPT_USERAGENT => "Mozilla/5.0",
-        CURLOPT_HEADER => true
     ]);
 
-    $response = curl_exec($ch);
-
-    if ($response === false) {
-        curl_close($ch);
-        return null;
-    }
-
-    $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-    $body = substr($response, $headerSize);
+    curl_exec($ch);
 
     $contentType = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-    $size = strlen($body);
 
     curl_close($ch);
+    fclose($fp);
 
     if (!$contentType || strpos($contentType, "image/") !== 0) {
-        return null;
+        unlink($tmpFile);
+        return false;
     }
 
-    if ($size < MIN_IMAGE_SIZE || $size > MAX_IMAGE_SIZE) {
-        return null;
-    }
-
-    return $body;
+    return true;
 }
 
 /* ======================================================
@@ -69,8 +120,20 @@ function downloadImage($url)
  * ====================================================== */
 function convertToWebp($imageData)
 {
-    $img = @imagecreatefromstring($imageData);
+    $info = @getimagesizefromstring($imageData);
 
+    if (!$info) return null;
+
+    $width  = $info[0];
+    $height = $info[1];
+
+    $estimatedMemory = $width * $height * 4;
+    if ($estimatedMemory > 100 * 1024 * 1024) {
+        echo "❌ too large (dimensions)\n";
+        return null;
+    }
+
+    $img = @imagecreatefromstring($imageData);
     if (!$img) return null;
 
     ob_start();
@@ -82,43 +145,47 @@ function convertToWebp($imageData)
     return $webpData ?: null;
 }
 
-/* ======================================================
- * SAVE IMAGE
- * ====================================================== */
-function saveImage($dir, $url)
+function convertFileToWebp($input, $output)
 {
-    static $seen = [];
+    $info = @getimagesize($input);
+    if (!$info) return false;
 
-    if (!$url) return;
+    $width  = $info[0];
+    $height = $info[1];
 
-    $hash = md5($url);
+    $estimatedMemory = $width * $height * 4;
 
-    if (isset($seen[$hash])) return;
-    $seen[$hash] = true;
-
-    $file = "{$dir}/{$hash}.webp";
-
-    if (file_exists($file)) return;
-
-    echo "Downloading: $url\n";
-
-    $raw = downloadImage($url);
-
-    if (!$raw) {
-        echo "❌ invalid image\n";
-        return;
+    if ($estimatedMemory > 50 * 1024 * 1024) {
+        echo "❌ too large (dimensions)\n";
+        return false;
     }
 
-    $webp = convertToWebp($raw);
+    $data = file_get_contents($input);
+    if (!$data) return false;
 
-    if (!$webp) {
-        echo "❌ convert failed\n";
-        return;
+    $img = @imagecreatefromstring($data);
+    if (!$img) return false;
+
+    if (!imageistruecolor($img)) {
+        $truecolor = imagecreatetruecolor(imagesx($img), imagesy($img));
+
+        imagealphablending($truecolor, false);
+        imagesavealpha($truecolor, true);
+
+        imagecopy($truecolor, $img, 0, 0, 0, 0, imagesx($img), imagesy($img));
+
+        imagedestroy($img);
+        $img = $truecolor;
     }
 
-    file_put_contents($file, $webp);
+    imagealphablending($img, true);
+    imagesavealpha($img, true);
 
-    echo "✅ saved: $file\n";
+    $result = imagewebp($img, $output, 80);
+
+    imagedestroy($img);
+
+    return $result;
 }
 
 /* ======================================================
