@@ -52,6 +52,113 @@ CATEGORIES = [
 ]
 ```
 
+## Get all products in a spefic category by a spefic store
+
+2319 is store id.
+
+dishwashing-detergents is category slug.
+
+```bash
+curl 'https://apigateway.okala.com/api/unicorn/v2/products/store/2319?pC_Id=1471&slug=dishwashing-detergents' \
+  -H 'accept: application/json, text/plain, */*' \
+  -H 'accept-language: en-US,en;q=0.9,fa;q=0.8,it;q=0.7,tr;q=0.6' \
+  -H 'advertising_id: null' \
+  -H 'authorization: Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IjEzRjRFNUExQ0NGNUU4NjRBQTI3MzgyMkM3OENERTIxQTM4MkRBOENSUzI1NiIsInR5cCI6ImF0K2p3dCIsIng1dCI6IkVfVGxvY3oxNkdTcUp6Z2l4NHplSWFPQzJvdyJ9.eyJuYmYiOjE3ODAwOTAzMTYsImV4cCI6MTc4MDA5MjExNiwiaXNzIjoiaHR0cDovL2NlcmJlcnVzLm1lbWJlcnNoaXAiLCJjbGllbnRfaWQiOiJjdXN0b21lcl9jbGllbnRfaWQiLCJzdWIiOiIxMTE1NzA1MCIsImF1dGhfdGltZSI6MTc4MDA1MDIxNCwiaWRwIjoibG9jYWwiLCJ1c2VySWQiOiIxMTE1NzA1MCIsInVzZXJuYW1lIjoiMDkxMzQ5NTA3ODciLCJhbHRlcm5hdGl2ZUN1c3RvbWVySWQiOiIxMTE1NzA1MCIsInRlbmFudCI6Im9rYWxhIiwidG9rZW4taWQiOiJjMjc4OTcyNi0wNjhlLTQ3MDYtYTgwYi00ZDNjMzBmNzkxMzVfOWFjYTg2ODItMjA3YS00MjkwLTgxMzAtZjYxNWNiZGM2NWJiIiwiY2VyYmVydXNJZCI6ImMyNzg5NzI2LTA2OGUtNDcwNi1hODBiLTRkM2MzMGY3OTEzNSIsImp0aSI6IjIwRDEzN0QxODQyNTdDODNEMDMzNEYxRTYyRkQ3MzlBIiwiaWF0IjoxNzgwMDkwMzE2LCJzY29wZSI6WyJvZmZsaW5lX2FjY2VzcyJdLCJhbXIiOlsiY3VzdG9tZXJfZ3JhbnRfdHlwZSJdfQ.NVKYTJaGMN2VrKbalU4PneE40SE9fVZevzSfEXbieKqYq0BoTTSj2VADIhOhAfZmdpiR58IVsekMSprHoKQzIvlAC0qIu6KGnzsgvI_-bKWWTLirG1VMJfwXOipaBl9J2LNRXjY6guBaWRxUp9VguyWnaXuqfp2IXUyJuIFH2Rq2x9qbl8G86Pk4RsuMPtIRwS3joixayNZaj6ilrgwc6L0eu4Qr6UcMRB1e0lNrPjs8xSHYOh3dNEr8PkWUqPbFqkT2YwDSQY9_YflwP7h8q1J0uQAFAi1VXij2iLDF9Sbowe-1zcD3TUOgD3c6vgIbbJjDhzxgaD9vralEUKdw3Q' \
+  -H 'idfa: null' \
+  -H 'metrix_user_id: null' \
+  -H 'origin: https://www.okala.com' \
+  -H 'priority: u=1, i' \
+  -H 'sec-ch-ua: "Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"' \
+  -H 'sec-ch-ua-mobile: ?0' \
+  -H 'sec-ch-ua-platform: "Windows"' \
+  -H 'sec-fetch-dest: empty' \
+  -H 'sec-fetch-mode: cors' \
+  -H 'sec-fetch-site: same-site' \
+  -H 'session-id: f008dd2f-a61d-4eee-b6c1-3c366781078a' \
+  -H 'source: okala' \
+  -H 'ui-version: 2.0' \
+  -H 'user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36' \
+  -H 'x-correlation-id: 7077c90c-e851-40de-af24-48a568aac6b7' \
+  -H 'x-skip-authorization: false' \
+  -H 'x-user-unique-id: 32063c6e-098f-437f-8777-291d5d7c3786'
+```
+
+Response:
+
+```json
+{
+    "data": [
+        {
+            "storeId": 2319,
+            "maxOrderLimit": 10,
+            "discountPercent": 0,
+            "isShowDiscount": false,
+            "quantity": 2,
+            "hasQuantity": true,
+            "id": 191673,
+            "name": "مایع جلادهنده ماشین ظرفشویی هوم پلاس حجم 750 میلی لیتر",
+            "price": 2300000.0,
+            "okPrice": 2300000.0,
+            "imageUrl": "https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/439433.png",
+            "isBundle": false,
+            "supplyStatus": 1,
+            "docRankT": 10319560705019998,
+            "masterProductId": 341299
+        },
+        {
+            "storeId": 2319,
+            "maxOrderLimit": 5,
+            "discountPercent": 5,
+            "isShowDiscount": true,
+            "quantity": 18,
+            "hasQuantity": true,
+            "id": 196661,
+            "name": "مايع ظرفشويي پریل مدل Ultra Cold Power لیمویی 1 لیتری",
+            "price": 2277428.0,
+            "okPrice": 2149000.0,
+            "imageUrl": "https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/8fdef2d3-d9e9-4d8b-8f8e-24cd3bc8a131.jpg",
+            "isBundle": false,
+            "supplyStatus": 1,
+            "docRankT": 10319560705018963,
+            "masterProductId": 194586
+        },
+        {
+            "storeId": 2319,
+            "maxOrderLimit": 5,
+            "discountPercent": 8,
+            "isShowDiscount": true,
+            "quantity": 10,
+            "hasQuantity": true,
+            "id": 196662,
+            "name": "مایع ظرفشویی پریل مدل Ultra با رایحه لیمو 3.75 لیتری",
+            "price": 7771723.0,
+            "okPrice": 7149001.0,
+            "imageUrl": "https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/974cd6a2-9ac4-4050-bbb1-b0d69bb2a00f.jpg",
+            "isBundle": false,
+            "supplyStatus": 1,
+            "docRankT": 10319560705018962,
+            "masterProductId": 194476
+        },
+        {
+            "storeId": 2319,
+            "maxOrderLimit": 5,
+            "discountPercent": 5,
+            "isShowDiscount": true,
+            "quantity": 6,
+            "hasQuantity": true,
+            "id": 197474,
+            "name": "مایع ظرفشویی اکتیو مدل Red Fruit and flower حجم 750 میلی لیتر",
+            "price": 1286448.0,
+            "okPrice": 1217000.0,
+            "imageUrl": "https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/69ee0ada-eaa8-442e-9bbc-e89301ceba34.jpg",
+            "isBundle": false,
+            "supplyStatus": 1,
+            "docRankT": 10319560705018958,
+            "masterProductId": 195304
+        },
+...
+```
+
 ## Get Products in a spefic category by any stores nearby me (Tehran)
 
 For example one slug (category): beverages
