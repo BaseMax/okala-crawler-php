@@ -4,6 +4,8 @@ ini_set('max_execution_time', '0');
 
 const CONFIG_FILE = "products.json";
 const IMAGE_DIR = __DIR__ . "/images";
+const ORIGINAL_IMAGE_DIR = __DIR__ . "/images/original";
+const COMPRESSED_IMAGE_DIR = __DIR__ . "/images/compressed";
 const MAX_IMAGE_SIZE = 30 * 1024 * 1024;
 const MIN_IMAGE_SIZE = 1024;
 const CURL_TIMEOUT = 30;
@@ -196,10 +198,12 @@ class ImageDownloader
     private $logger;
     private $seenUrls = [];
     private $currentProductName = "";
+    private $forceReprocess = false;
 
-    public function __construct(Logger $logger)
+    public function __construct(Logger $logger, bool $forceReprocess = false)
     {
         $this->logger = $logger;
+        $this->forceReprocess = $forceReprocess;
     }
 
     public function setCurrentProduct(string $productName): void
@@ -207,7 +211,7 @@ class ImageDownloader
         $this->currentProductName = $productName;
     }
 
-    public function download(string $url, string $dir): bool
+    public function download(string $url, string $type = "product"): bool
     {
         if (!$url) {
             $this->logger->incrementSkipped();
@@ -223,15 +227,22 @@ class ImageDownloader
         }
 
         $this->seenUrls[$hash] = true;
-        $filePath = "{$dir}/{$hash}.webp";
 
-        if ($this->isValidWebp($filePath)) {
-            $this->logger->logCache("Cached: {$filePath}");
+        $extension = $this->getFileExtension($url);
+
+        $originalPath = ORIGINAL_IMAGE_DIR . "/{$type}/{$hash}.{$extension}";
+        $compressedPath = COMPRESSED_IMAGE_DIR . "/{$type}/{$hash}.webp";
+
+        if (!$this->forceReprocess && $this->isValidWebp($compressedPath)) {
+            $this->logger->logCache("Cached: {$compressedPath}");
             return true;
         }
 
-        if (file_exists($filePath)) {
-            @unlink($filePath);
+        if (file_exists($originalPath)) {
+            @unlink($originalPath);
+        }
+        if (file_exists($compressedPath)) {
+            @unlink($compressedPath);
         }
 
         $tempFile = sys_get_temp_dir() . "/img_" . $hash;
@@ -256,7 +267,14 @@ class ImageDownloader
             return false;
         }
 
-        if (!$this->convertToWebp($tempFile, $filePath)) {
+        if (!$this->saveOriginalImage($tempFile, $originalPath)) {
+            $reason = "Failed to save original image";
+            $this->logger->logWarning($reason);
+            @unlink($tempFile);
+            return false;
+        }
+
+        if (!$this->convertToWebp($tempFile, $compressedPath)) {
             $reason = "WebP conversion failed";
             $this->logger->logError($reason);
             $this->logger->recordFailedImage($this->currentProductName, $url, $reason);
@@ -265,8 +283,30 @@ class ImageDownloader
         }
 
         @unlink($tempFile);
-        $this->logger->logSuccess("Saved: {$filePath}");
+        $this->logger->logSuccess("Saved: Original ({$originalPath}) + Compressed ({$compressedPath})");
         return true;
+    }
+
+    private function getFileExtension(string $url): string
+    {
+        $path = parse_url($url, PHP_URL_PATH);
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
+
+        if (empty($extension) || strlen($extension) > 5) {
+            return 'jpg';
+        }
+
+        return strtolower($extension);
+    }
+
+    private function saveOriginalImage(string $source, string $destination): bool
+    {
+        $dir = dirname($destination);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+
+        return @copy($source, $destination) !== false;
     }
 
     private function isValidWebp(string $filePath): bool
@@ -480,6 +520,13 @@ class ImageDownloader
 
 $logger = new Logger(__DIR__);
 
+$forceReprocess = in_array('--force', $argv) || in_array('-f', $argv);
+
+if ($forceReprocess) {
+    $logger->logInfo("🔄 Force reprocessing all images (ignoring cache)");
+    echo "\n";
+}
+
 if (!file_exists(CONFIG_FILE)) {
     $logger->logError("Configuration file not found", CONFIG_FILE);
     die(1);
@@ -496,14 +543,13 @@ if (!$data || !is_array($data)) {
 
 $logger->logInfo("Loaded " . count($data) . " products");
 
-if (!@mkdir(IMAGE_DIR . "/brand", 0777, true)) {
-    $logger->logWarning("Could not create brand directory");
-}
-if (!@mkdir(IMAGE_DIR . "/product", 0777, true)) {
-    $logger->logWarning("Could not create product directory");
-}
+@mkdir(ORIGINAL_IMAGE_DIR . "/brand", 0777, true);
+@mkdir(ORIGINAL_IMAGE_DIR . "/product", 0777, true);
+@mkdir(COMPRESSED_IMAGE_DIR . "/brand", 0777, true);
+@mkdir(COMPRESSED_IMAGE_DIR . "/product", 0777, true);
 
-$logger->logInfo("Image output directory: " . IMAGE_DIR);
+$logger->logInfo("Original images directory: " . ORIGINAL_IMAGE_DIR);
+$logger->logInfo("Compressed images directory: " . COMPRESSED_IMAGE_DIR);
 echo "\n";
 
 $totalImages = 0;
@@ -516,7 +562,7 @@ foreach ($data as $item) {
 }
 
 $progressBar = new ProgressBar($totalImages);
-$downloader = new ImageDownloader($logger);
+$downloader = new ImageDownloader($logger, $forceReprocess);
 
 foreach ($data as $index => $product) {
     $productName = $product["name"] ?? "Unknown";
@@ -524,13 +570,13 @@ foreach ($data as $index => $product) {
     $downloader->setCurrentProduct($productName);
 
     if (!empty($product["brandImage"])) {
-        $downloader->download($product["brandImage"], IMAGE_DIR . "/brand");
+        $downloader->download($product["brandImage"], "brand");
         $progressBar->advance();
     }
 
     $images = $product["images"] ?? [];
     foreach ($images as $imageUrl) {
-        $downloader->download($imageUrl, IMAGE_DIR . "/product");
+        $downloader->download($imageUrl, "product");
         $progressBar->advance();
     }
 }
