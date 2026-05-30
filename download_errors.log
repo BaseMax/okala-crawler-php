@@ -1,33 +1,6 @@
 Download Error Report
-Generated: 2026-05-30 00:28:37
+Generated: 2026-05-30 00:32:42
 ================================================================================
-
-FAILED DOWNLOADS (5)
---------------------------------------------------------------------------------
-1. Product: پک تافي کاراملی دوبرز 400 گرمی بسته 3 عددی
-   URL: https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/e74e3566-adec-4445-bfd5-65b7af4ac1ab.jpg
-   Reason: WebP conversion failed
-   Time: 2026-05-30 00:28:20
-
-2. Product: نوشابه خانواده 2250 سی سی کوکاکولا بسته 4 عددی
-   URL: https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/39f02f02-5b83-4def-b665-54822172b8d2.png
-   Reason: WebP conversion failed
-   Time: 2026-05-30 00:28:23
-
-3. Product: ما،الشعیر استوایی 330 سی سی هی دی بسته 2 عددی
-   URL: https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/a602c2bf-bde7-4b83-adcb-5397a4285a19.png
-   Reason: WebP conversion failed
-   Time: 2026-05-30 00:28:25
-
-4. Product: شامپو صورت و بدن صدفی سبز آبی 400 گرمی حیات
-   URL: https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/139024.png
-   Reason: WebP conversion failed
-   Time: 2026-05-30 00:28:34
-
-5. Product: شامپو صورت و بدن صدفی سبز آبی 400 گرمی حیات
-   URL: https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/139023.png
-   Reason: WebP conversion failed
-   Time: 2026-05-30 00:28:36
 
 
 INVALID SIZE IMAGES (1)
@@ -37,5 +10,5 @@ INVALID SIZE IMAGES (1)
 1. Product: شامپو صورت و بدن صدفی سبز آبی 400 گرمی حیات
    URL: https://asset.okala.com/unsigned/rs:fill/size:0:0/plain/s3://cdn/product/139025.png
    Size: 15220.54 KB
-   Time: 2026-05-30 00:28:32
+   Time: 2026-05-30 00:32:35
 

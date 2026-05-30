@@ -1,12 +1,16 @@
 <?php
+ini_set('memory_limit', '1024M');
+ini_set('max_execution_time', '0');
+
 const CONFIG_FILE = "products.json";
 const IMAGE_DIR = __DIR__ . "/images";
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 30 * 1024 * 1024;
 const MIN_IMAGE_SIZE = 1024;
-const CURL_TIMEOUT = 20;
-const CURL_CONNECT_TIMEOUT = 10;
-const MAX_MEMORY_USAGE = 100 * 1024 * 1024;
-const MAX_IMAGE_WIDTH = 2000;
+const CURL_TIMEOUT = 30;
+const CURL_CONNECT_TIMEOUT = 15;
+const MAX_IMAGE_WIDTH = 1200;
+const MAX_IMAGE_HEIGHT = 1200;
+const WEBP_QUALITY = 70;
 
 class Logger
 {
@@ -318,120 +322,25 @@ class ImageDownloader
         return true;
     }
 
-private function resizeIfNeeded($img): array
-{
-    $width = imagesx($img);
-    $height = imagesy($img);
-
-    if ($width <= MAX_IMAGE_WIDTH) {
-        return [$img, $width, $height];
-    }
-
-    $newWidth = MAX_IMAGE_WIDTH;
-    $newHeight = (int) round(($height * $newWidth) / $width);
-
-    $resized = imagecreatetruecolor($newWidth, $newHeight);
-
-    // preserve transparency
-    imagealphablending($resized, false);
-    imagesavealpha($resized, true);
-
-    $transparent = imagecolorallocatealpha($resized, 0, 0, 0, 127);
-    imagefilledrectangle($resized, 0, 0, $newWidth, $newHeight, $transparent);
-
-    imagecopyresampled(
-        $resized,
-        $img,
-        0, 0, 0, 0,
-        $newWidth,
-        $newHeight,
-        $width,
-        $height
-    );
-
-    imagedestroy($img);
-
-    return [$resized, $newWidth, $newHeight];
-}
     private function convertToWebp(string $input, string $output): bool
     {
-        if (!function_exists('imagewebp')) {
-            $this->logger->logWarning("GD WebP support is not available");
-            return false;
-        }
-
-        $info = @getimagesize($input);
-        if (!$info) {
-            $this->logger->logWarning("Cannot read image info");
-            return false;
-        }
-
-        [$width, $height, $type] = $info;
-
-        $estimatedMemory = $width * $height * 6;
-
-        if ($estimatedMemory > MAX_MEMORY_USAGE) {
-            $this->logger->logWarning("Image exceeds memory threshold: {$width}x{$height}");
-            return false;
-        }
-
-        $data = @file_get_contents($input);
-        if ($data === false) {
-            $this->logger->logWarning("Cannot read file");
-            return false;
-        }
-
-        $img = @imagecreatefromstring($data);
-        if (!$img) {
-            $this->logger->logWarning("GD failed to decode image");
-
-            if (class_exists('Imagick')) {
-                return $this->convertWithImagick($input, $output);
-            }
-
-            return false;
-        }
-
-        $img = $this->normalizeToTrueColor($img);
-        [$img, $width, $height] = $this->resizeIfNeeded($img);
-
-        imagealphablending($img, true);
-        imagesavealpha($img, true);
-
         $dir = dirname($output);
         if (!is_dir($dir)) {
             @mkdir($dir, 0777, true);
         }
 
-        $result = @imagewebp($img, $output, 82);
+        // Try Imagick first (more memory efficient)
+        if (extension_loaded('imagick')) {
+            return $this->convertWithImagick($input, $output);
+        }
 
-        imagedestroy($img);
-
-        if (!$result) {
-            $this->logger->logWarning("imagewebp failed for {$input}");
+        // Fall back to GD
+        if (!function_exists('imagewebp')) {
+            $this->logger->logWarning("GD WebP support not available");
             return false;
         }
 
-        return true;
-    }
-
-    private function normalizeToTrueColor($img)
-    {
-        $width = imagesx($img);
-        $height = imagesy($img);
-
-        $truecolor = imagecreatetruecolor($width, $height);
-
-        imagealphablending($truecolor, false);
-        imagesavealpha($truecolor, true);
-
-        $transparent = imagecolorallocatealpha($truecolor, 0, 0, 0, 127);
-        imagefilledrectangle($truecolor, 0, 0, $width, $height, $transparent);
-
-        imagecopy($truecolor, $img, 0, 0, 0, 0, $width, $height);
-        imagedestroy($img);
-
-        return $truecolor;
+        return $this->convertWithGD($input, $output);
     }
 
     private function convertWithImagick(string $input, string $output): bool
@@ -439,18 +348,128 @@ private function resizeIfNeeded($img): array
         try {
             $img = new \Imagick($input);
 
+            // Get original dimensions
+            $width = $img->getImageWidth();
+            $height = $img->getImageHeight();
+
+            // Resize if needed
+            if ($width > MAX_IMAGE_WIDTH || $height > MAX_IMAGE_HEIGHT) {
+                $img->scaleImage(MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT, true);
+            }
+
+            // Strip all metadata for smaller file size
+            $img->stripImage();
+
+            // Set WebP format and compression
             $img->setImageFormat('webp');
-            $img->setImageCompressionQuality(82);
+            $img->setImageCompressionQuality(WEBP_QUALITY);
+            $img->setOption('webp:lossless', 'false');
+            $img->setOption('webp:alpha-quality', '90');
+
+            // Remove ICC profile to reduce size
+            $img->removeImageProfile('ICC');
 
             $img->writeImage($output);
             $img->clear();
             $img->destroy();
 
             return true;
-        } catch (\Throwable $e) {
-            $this->logger->logWarning("Imagick fallback failed: " . $e->getMessage());
+        } catch (\Exception $e) {
+            $this->logger->logWarning("Imagick conversion failed: " . $e->getMessage());
             return false;
         }
+    }
+
+    private function convertWithGD(string $input, string $output): bool
+    {
+        // First get dimensions to calculate rescaling
+        $info = @getimagesize($input);
+        if (!$info) {
+            $this->logger->logWarning("Cannot read image dimensions");
+            return false;
+        }
+
+        [$origWidth, $origHeight] = $info;
+
+        // Calculate rescaled dimensions if needed
+        $newWidth = $origWidth;
+        $newHeight = $origHeight;
+
+        if ($origWidth > MAX_IMAGE_WIDTH || $origHeight > MAX_IMAGE_HEIGHT) {
+            $ratio = min(MAX_IMAGE_WIDTH / $origWidth, MAX_IMAGE_HEIGHT / $origHeight);
+            $newWidth = (int)($origWidth * $ratio);
+            $newHeight = (int)($origHeight * $ratio);
+        }
+
+        // Load and create resource with resized dimensions
+        $data = @file_get_contents($input);
+        if ($data === false) {
+            $this->logger->logWarning("Cannot read file");
+            return false;
+        }
+
+        $img = @imagecreatefromstring($data);
+        unset($data); // Free memory immediately
+
+        if (!$img) {
+            $this->logger->logWarning("Cannot decode image");
+            return false;
+        }
+
+        // Resize if needed
+        if ($newWidth !== $origWidth || $newHeight !== $origHeight) {
+            $resized = @imagecreatetruecolor($newWidth, $newHeight);
+            if (!$resized) {
+                imagedestroy($img);
+                $this->logger->logWarning("Cannot allocate image resource");
+                return false;
+            }
+
+            imagealphablending($resized, false);
+            imagesavealpha($resized, true);
+
+            $transparent = @imagecolorallocatealpha($resized, 0, 0, 0, 127);
+            @imagefilledrectangle($resized, 0, 0, $newWidth, $newHeight, $transparent);
+
+            @imagecopyresampled(
+                $resized,
+                $img,
+                0, 0, 0, 0,
+                $newWidth, $newHeight,
+                $origWidth, $origHeight
+            );
+
+            imagedestroy($img);
+            $img = $resized;
+        }
+
+        // Convert to truecolor if not already
+        if (!imageistruecolor($img)) {
+            $tc = @imagecreatetruecolor($newWidth, $newHeight);
+            if ($tc) {
+                imagealphablending($tc, false);
+                imagesavealpha($tc, true);
+                imagecopy($tc, $img, 0, 0, 0, 0, $newWidth, $newHeight);
+                imagedestroy($img);
+                $img = $tc;
+            }
+        }
+
+        imagealphablending($img, true);
+        imagesavealpha($img, true);
+
+        // Enable progressive/interlaced for better compression
+        @imageinterlace($img, 1);
+
+        $result = @imagewebp($img, $output, WEBP_QUALITY);
+        imagedestroy($img);
+
+        if (!$result) {
+            $this->logger->logWarning("Failed to save WebP");
+            return false;
+        }
+
+        return true;
     }
 }
 
