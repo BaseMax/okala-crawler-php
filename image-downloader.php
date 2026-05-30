@@ -10,7 +10,7 @@ const CURL_TIMEOUT = 30;
 const CURL_CONNECT_TIMEOUT = 15;
 const MAX_IMAGE_WIDTH = 1200;
 const MAX_IMAGE_HEIGHT = 1200;
-const WEBP_QUALITY = 70;
+const WEBP_QUALITY = 60;
 
 class Logger
 {
@@ -329,12 +329,10 @@ class ImageDownloader
             @mkdir($dir, 0777, true);
         }
 
-        // Try Imagick first (more memory efficient)
         if (extension_loaded('imagick')) {
             return $this->convertWithImagick($input, $output);
         }
 
-        // Fall back to GD
         if (!function_exists('imagewebp')) {
             $this->logger->logWarning("GD WebP support not available");
             return false;
@@ -348,25 +346,22 @@ class ImageDownloader
         try {
             $img = new \Imagick($input);
 
-            // Get original dimensions
             $width = $img->getImageWidth();
             $height = $img->getImageHeight();
 
-            // Resize if needed
             if ($width > MAX_IMAGE_WIDTH || $height > MAX_IMAGE_HEIGHT) {
                 $img->scaleImage(MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT, true);
             }
 
-            // Strip all metadata for smaller file size
+            $this->addWhiteBackground($img);
+
             $img->stripImage();
 
-            // Set WebP format and compression
             $img->setImageFormat('webp');
             $img->setImageCompressionQuality(WEBP_QUALITY);
             $img->setOption('webp:lossless', 'false');
-            $img->setOption('webp:alpha-quality', '90');
+            $img->setOption('webp:alpha-quality', '60');
 
-            // Remove ICC profile to reduce size
             $img->removeImageProfile('ICC');
 
             $img->writeImage($output);
@@ -380,9 +375,22 @@ class ImageDownloader
         }
     }
 
+    private function addWhiteBackground(&$img): void
+    {
+        try {
+            $bg = new \Imagick();
+            $bg->newImage($img->getImageWidth(), $img->getImageHeight(), new \ImagickPixel('white'));
+            $bg->compositeImage($img, \Imagick::COMPOSITE_OVER, 0, 0);
+            $img->clear();
+            $img->destroy();
+            $img = $bg;
+        } catch (\Exception $e) {
+            $this->logger->logWarning("If background addition fails, continue without it");
+        }
+    }
+
     private function convertWithGD(string $input, string $output): bool
     {
-        // First get dimensions to calculate rescaling
         $info = @getimagesize($input);
         if (!$info) {
             $this->logger->logWarning("Cannot read image dimensions");
@@ -391,7 +399,6 @@ class ImageDownloader
 
         [$origWidth, $origHeight] = $info;
 
-        // Calculate rescaled dimensions if needed
         $newWidth = $origWidth;
         $newHeight = $origHeight;
 
@@ -401,7 +408,6 @@ class ImageDownloader
             $newHeight = (int)($origHeight * $ratio);
         }
 
-        // Load and create resource with resized dimensions
         $data = @file_get_contents($input);
         if ($data === false) {
             $this->logger->logWarning("Cannot read file");
@@ -409,14 +415,13 @@ class ImageDownloader
         }
 
         $img = @imagecreatefromstring($data);
-        unset($data); // Free memory immediately
+        unset($data);
 
         if (!$img) {
             $this->logger->logWarning("Cannot decode image");
             return false;
         }
 
-        // Resize if needed
         if ($newWidth !== $origWidth || $newHeight !== $origHeight) {
             $resized = @imagecreatetruecolor($newWidth, $newHeight);
             if (!$resized) {
@@ -443,22 +448,22 @@ class ImageDownloader
             $img = $resized;
         }
 
-        // Convert to truecolor if not already
-        if (!imageistruecolor($img)) {
-            $tc = @imagecreatetruecolor($newWidth, $newHeight);
-            if ($tc) {
-                imagealphablending($tc, false);
-                imagesavealpha($tc, true);
-                imagecopy($tc, $img, 0, 0, 0, 0, $newWidth, $newHeight);
-                imagedestroy($img);
-                $img = $tc;
-            }
+        $whiteBg = @imagecreatetruecolor($newWidth, $newHeight);
+        if (!$whiteBg) {
+            imagedestroy($img);
+            $this->logger->logWarning("Cannot create background image");
+            return false;
         }
 
-        imagealphablending($img, true);
-        imagesavealpha($img, true);
+        $white = @imagecolorallocate($whiteBg, 255, 255, 255);
+        @imagefilledrectangle($whiteBg, 0, 0, $newWidth, $newHeight, $white);
 
-        // Enable progressive/interlaced for better compression
+        imagealphablending($whiteBg, true);
+        @imagecopy($whiteBg, $img, 0, 0, 0, 0, $newWidth, $newHeight);
+        imagedestroy($img);
+
+        $img = $whiteBg;
+
         @imageinterlace($img, 1);
 
         $result = @imagewebp($img, $output, WEBP_QUALITY);
