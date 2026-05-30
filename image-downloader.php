@@ -1,11 +1,12 @@
 <?php
 const CONFIG_FILE = "products.json";
 const IMAGE_DIR = __DIR__ . "/images";
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 const MIN_IMAGE_SIZE = 1024;
 const CURL_TIMEOUT = 20;
 const CURL_CONNECT_TIMEOUT = 10;
-const MAX_MEMORY_USAGE = 50 * 1024 * 1024;
+const MAX_MEMORY_USAGE = 100 * 1024 * 1024;
+const MAX_IMAGE_WIDTH = 2000;
 
 class Logger
 {
@@ -16,6 +17,14 @@ class Logger
         'invalid_size' => 0,
         'skipped' => 0,
     ];
+    private $failedImages = [];
+    private $invalidSizeImages = [];
+    private $logFile;
+
+    public function __construct(string $logDir = __DIR__)
+    {
+        $this->logFile = $logDir . "/download_errors.log";
+    }
 
     public function logDownload(string $message): void
     {
@@ -64,6 +73,26 @@ class Logger
         $this->stats['invalid_size']++;
     }
 
+    public function recordFailedImage(string $productName, string $url, string $reason): void
+    {
+        $this->failedImages[] = [
+            'product' => $productName,
+            'url' => $url,
+            'reason' => $reason,
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+    }
+
+    public function recordInvalidSizeImage(string $productName, string $url, int $size): void
+    {
+        $this->invalidSizeImages[] = [
+            'product' => $productName,
+            'url' => $url,
+            'size' => $size,
+            'timestamp' => date('Y-m-d H:i:s')
+        ];
+    }
+
     public function printStats(): void
     {
         echo "\n" . str_repeat("=", 60) . "\n";
@@ -75,6 +104,48 @@ class Logger
         echo "⚠️  Invalid Size: " . $this->stats['invalid_size'] . "\n";
         echo "⊘  Skipped:    " . $this->stats['skipped'] . "\n";
         echo str_repeat("=", 60) . "\n";
+
+        $this->writeErrorLog();
+
+        if (!empty($this->failedImages) || !empty($this->invalidSizeImages)) {
+            echo "\n📋 Error details saved to: {$this->logFile}\n";
+        }
+    }
+
+    private function writeErrorLog(): void
+    {
+        if (empty($this->failedImages) && empty($this->invalidSizeImages)) {
+            return;
+        }
+
+        $content = "Download Error Report\n";
+        $content .= "Generated: " . date('Y-m-d H:i:s') . "\n";
+        $content .= str_repeat("=", 80) . "\n\n";
+
+        if (!empty($this->failedImages)) {
+            $content .= "FAILED DOWNLOADS (" . count($this->failedImages) . ")\n";
+            $content .= str_repeat("-", 80) . "\n";
+            foreach ($this->failedImages as $index => $image) {
+                $content .= ($index + 1) . ". Product: " . $image['product'] . "\n";
+                $content .= "   URL: " . $image['url'] . "\n";
+                $content .= "   Reason: " . $image['reason'] . "\n";
+                $content .= "   Time: " . $image['timestamp'] . "\n\n";
+            }
+        }
+
+        if (!empty($this->invalidSizeImages)) {
+            $content .= "\nINVALID SIZE IMAGES (" . count($this->invalidSizeImages) . ")\n";
+            $content .= str_repeat("-", 80) . "\n";
+            $content .= "(Valid range: " . (MIN_IMAGE_SIZE / 1024) . " KB - " . (MAX_IMAGE_SIZE / (1024 * 1024)) . " MB)\n\n";
+            foreach ($this->invalidSizeImages as $index => $image) {
+                $content .= ($index + 1) . ". Product: " . $image['product'] . "\n";
+                $content .= "   URL: " . $image['url'] . "\n";
+                $content .= "   Size: " . round($image['size'] / 1024, 2) . " KB\n";
+                $content .= "   Time: " . $image['timestamp'] . "\n\n";
+            }
+        }
+
+        file_put_contents($this->logFile, $content);
     }
 }
 
@@ -120,10 +191,16 @@ class ImageDownloader
 {
     private $logger;
     private $seenUrls = [];
+    private $currentProductName = "";
 
     public function __construct(Logger $logger)
     {
         $this->logger = $logger;
+    }
+
+    public function setCurrentProduct(string $productName): void
+    {
+        $this->currentProductName = $productName;
     }
 
     public function download(string $url, string $dir): bool
@@ -158,21 +235,27 @@ class ImageDownloader
         $this->logger->logDownload("Downloading: " . substr($url, 0, 60) . "...");
 
         if (!$this->downloadToFile($url, $tempFile)) {
-            $this->logger->logError("Download failed", "Invalid content type or network error");
+            $reason = "Invalid content type or network error";
+            $this->logger->logError("Download failed", $reason);
+            $this->logger->recordFailedImage($this->currentProductName, $url, $reason);
             @unlink($tempFile);
             return false;
         }
 
         $size = @filesize($tempFile);
         if ($size === false || $size < MIN_IMAGE_SIZE || $size > MAX_IMAGE_SIZE) {
-            $this->logger->logWarning("Invalid file size: {$size} bytes");
+            $sizeStr = $size === false ? "unknown" : "{$size} bytes";
+            $this->logger->logWarning("Invalid file size: {$sizeStr}");
             $this->logger->incrementInvalidSize();
+            $this->logger->recordInvalidSizeImage($this->currentProductName, $url, $size ?: 0);
             @unlink($tempFile);
             return false;
         }
 
         if (!$this->convertToWebp($tempFile, $filePath)) {
-            $this->logger->logError("WebP conversion failed");
+            $reason = "WebP conversion failed";
+            $this->logger->logError($reason);
+            $this->logger->recordFailedImage($this->currentProductName, $url, $reason);
             @unlink($tempFile);
             return false;
         }
@@ -235,55 +318,143 @@ class ImageDownloader
         return true;
     }
 
+private function resizeIfNeeded($img): array
+{
+    $width = imagesx($img);
+    $height = imagesy($img);
+
+    if ($width <= MAX_IMAGE_WIDTH) {
+        return [$img, $width, $height];
+    }
+
+    $newWidth = MAX_IMAGE_WIDTH;
+    $newHeight = (int) round(($height * $newWidth) / $width);
+
+    $resized = imagecreatetruecolor($newWidth, $newHeight);
+
+    // preserve transparency
+    imagealphablending($resized, false);
+    imagesavealpha($resized, true);
+
+    $transparent = imagecolorallocatealpha($resized, 0, 0, 0, 127);
+    imagefilledrectangle($resized, 0, 0, $newWidth, $newHeight, $transparent);
+
+    imagecopyresampled(
+        $resized,
+        $img,
+        0, 0, 0, 0,
+        $newWidth,
+        $newHeight,
+        $width,
+        $height
+    );
+
+    imagedestroy($img);
+
+    return [$resized, $newWidth, $newHeight];
+}
     private function convertToWebp(string $input, string $output): bool
     {
-        $info = @getimagesize($input);
-        if (!$info) {
-            $this->logger->logWarning("Cannot read image dimensions");
+        if (!function_exists('imagewebp')) {
+            $this->logger->logWarning("GD WebP support is not available");
             return false;
         }
 
-        $width = $info[0];
-        $height = $info[1];
-        $estimatedMemory = $width * $height * 4;
+        $info = @getimagesize($input);
+        if (!$info) {
+            $this->logger->logWarning("Cannot read image info");
+            return false;
+        }
+
+        [$width, $height, $type] = $info;
+
+        $estimatedMemory = $width * $height * 6;
 
         if ($estimatedMemory > MAX_MEMORY_USAGE) {
-            $this->logger->logWarning("Image too large for memory: {$width}x{$height}");
+            $this->logger->logWarning("Image exceeds memory threshold: {$width}x{$height}");
             return false;
         }
 
         $data = @file_get_contents($input);
-        if (!$data) {
-            $this->logger->logWarning("Cannot read image data");
+        if ($data === false) {
+            $this->logger->logWarning("Cannot read file");
             return false;
         }
 
         $img = @imagecreatefromstring($data);
         if (!$img) {
-            $this->logger->logWarning("Cannot load image resource");
+            $this->logger->logWarning("GD failed to decode image");
+
+            if (class_exists('Imagick')) {
+                return $this->convertWithImagick($input, $output);
+            }
+
             return false;
         }
 
-        if (!imageistruecolor($img)) {
-            $truecolor = imagecreatetruecolor(imagesx($img), imagesy($img));
-            imagealphablending($truecolor, false);
-            imagesavealpha($truecolor, true);
-            imagecopy($truecolor, $img, 0, 0, 0, 0, imagesx($img), imagesy($img));
-            imagedestroy($img);
-            $img = $truecolor;
-        }
+        $img = $this->normalizeToTrueColor($img);
+        [$img, $width, $height] = $this->resizeIfNeeded($img);
 
         imagealphablending($img, true);
         imagesavealpha($img, true);
 
-        $result = @imagewebp($img, $output, 80);
+        $dir = dirname($output);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0777, true);
+        }
+
+        $result = @imagewebp($img, $output, 82);
+
         imagedestroy($img);
 
-        return $result !== false;
+        if (!$result) {
+            $this->logger->logWarning("imagewebp failed for {$input}");
+            return false;
+        }
+
+        return true;
+    }
+
+    private function normalizeToTrueColor($img)
+    {
+        $width = imagesx($img);
+        $height = imagesy($img);
+
+        $truecolor = imagecreatetruecolor($width, $height);
+
+        imagealphablending($truecolor, false);
+        imagesavealpha($truecolor, true);
+
+        $transparent = imagecolorallocatealpha($truecolor, 0, 0, 0, 127);
+        imagefilledrectangle($truecolor, 0, 0, $width, $height, $transparent);
+
+        imagecopy($truecolor, $img, 0, 0, 0, 0, $width, $height);
+        imagedestroy($img);
+
+        return $truecolor;
+    }
+
+    private function convertWithImagick(string $input, string $output): bool
+    {
+        try {
+            $img = new \Imagick($input);
+
+            $img->setImageFormat('webp');
+            $img->setImageCompressionQuality(82);
+
+            $img->writeImage($output);
+            $img->clear();
+            $img->destroy();
+
+            return true;
+        } catch (\Throwable $e) {
+            $this->logger->logWarning("Imagick fallback failed: " . $e->getMessage());
+            return false;
+        }
     }
 }
 
-$logger = new Logger();
+$logger = new Logger(__DIR__);
 
 if (!file_exists(CONFIG_FILE)) {
     $logger->logError("Configuration file not found", CONFIG_FILE);
@@ -326,6 +497,7 @@ $downloader = new ImageDownloader($logger);
 foreach ($data as $index => $product) {
     $productName = $product["name"] ?? "Unknown";
     $logger->logInfo("Processing product: {$productName}");
+    $downloader->setCurrentProduct($productName);
 
     if (!empty($product["brandImage"])) {
         $downloader->download($product["brandImage"], IMAGE_DIR . "/brand");
