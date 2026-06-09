@@ -385,47 +385,57 @@ class ImageDownloader
     {
         try {
             $img = new \Imagick($input);
-
+    
             $width = $img->getImageWidth();
             $height = $img->getImageHeight();
-
+    
             if ($width > MAX_IMAGE_WIDTH || $height > MAX_IMAGE_HEIGHT) {
                 $img->scaleImage(MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT, true);
             }
-
+    
             $this->addWhiteBackground($img);
-
+    
             $img->stripImage();
-
+    
             $img->setImageFormat('webp');
             $img->setImageCompressionQuality(WEBP_QUALITY);
             $img->setOption('webp:lossless', 'false');
             $img->setOption('webp:alpha-quality', '60');
-
-            $img->removeImageProfile('ICC');
-
+    
+            try {
+                if ($img->getImageProfile('icc')) {
+                    $img->removeImageProfile('icc');
+                }
+            } catch (\Exception $e) {
+                $this->logger->logWarning("Could not remove ICC profile: " . $e->getMessage());
+            }
+    
             $img->writeImage($output);
             $img->clear();
             $img->destroy();
-
+    
             return true;
         } catch (\Exception $e) {
             $this->logger->logWarning("Imagick conversion failed: " . $e->getMessage());
             return false;
         }
     }
-
+    
     private function addWhiteBackground(&$img): void
     {
         try {
             $bg = new \Imagick();
             $bg->newImage($img->getImageWidth(), $img->getImageHeight(), new \ImagickPixel('white'));
+            
+            $img->setImageFormat('png');
+            $bg->setImageFormat('png');
+            
             $bg->compositeImage($img, \Imagick::COMPOSITE_OVER, 0, 0);
             $img->clear();
             $img->destroy();
             $img = $bg;
         } catch (\Exception $e) {
-            $this->logger->logWarning("If background addition fails, continue without it");
+            $this->logger->logWarning("Background addition failed, continuing without it: " . $e->getMessage());
         }
     }
 
@@ -520,7 +530,7 @@ class ImageDownloader
 
 $logger = new Logger(__DIR__);
 
-$forceReprocess = in_array('--force', $argv) || in_array('-f', $argv);
+$forceReprocess = isset($argv) ? (in_array('--force', $argv) || in_array('-f', $argv) ) : true;
 
 if ($forceReprocess) {
     $logger->logInfo("🔄 Force reprocessing all images (ignoring cache)");
