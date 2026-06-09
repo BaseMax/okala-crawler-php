@@ -178,15 +178,15 @@ class ProgressBar
         $percentage = ($this->current / $this->total) * 100;
         $barLength = 30;
         $filledLength = (int)(($this->current / $this->total) * $barLength);
-
+    
         $bar = str_repeat("█", $filledLength) . str_repeat("░", $barLength - $filledLength);
         $elapsed = time() - $this->startTime;
         $remaining = $this->current > 0 ? (int)(($elapsed / $this->current) * ($this->total - $this->current)) : 0;
-
-        echo "\r";
+    
+        echo "\r\033[K";
         echo sprintf("[%s] %d/%d (%.1f%%) | %ds elapsed, %ds remaining",
             $bar, $this->current, $this->total, $percentage, $elapsed, $remaining);
-
+    
         if ($this->current === $this->total) {
             echo "\n";
         }
@@ -361,23 +361,27 @@ class ImageDownloader
 
         return true;
     }
-
+    
     private function convertToWebp(string $input, string $output): bool
     {
         $dir = dirname($output);
         if (!is_dir($dir)) {
             @mkdir($dir, 0777, true);
         }
-
+    
         if (extension_loaded('imagick')) {
-            return $this->convertWithImagick($input, $output);
+            $result = $this->convertWithImagick($input, $output);
+            if ($result) {
+                return true;
+            }
+            $this->logger->logWarning("Imagick failed, falling back to GD");
         }
-
+    
         if (!function_exists('imagewebp')) {
             $this->logger->logWarning("GD WebP support not available");
             return false;
         }
-
+    
         return $this->convertWithGD($input, $output);
     }
 
